@@ -999,3 +999,92 @@ fun agoText(seconds: Long): String = when {
     seconds < 172800 -> L("" + (seconds / 3600) + " hours ago", "පැය " + (seconds / 3600) + "කට කලින්")
     else -> L("" + (seconds / 86400) + " days ago", "දවස් " + (seconds / 86400) + "කට කලින්")
 }
+
+// ---------- hive health status (red, amber, green, grey) ----------
+
+/** The colour of a health status. */
+fun healthColor(level: String): Color = when (level) {
+    HiveHealth.PROBLEM -> WarnRed
+    HiveHealth.LOOK -> Amber
+    HiveHealth.HEALTHY -> GoodGreen
+    else -> Faint
+}
+
+/** The title of a health status in the chosen language. */
+fun healthTitle(level: String): String = when (level) {
+    HiveHealth.PROBLEM -> L("Problem found", "ප්‍රශ්නයක් හමු වුණා")
+    HiveHealth.LOOK -> L("Needs a look", "පෙට්ටිය බලන්න ඕනෑ")
+    HiveHealth.HEALTHY -> L("Healthy at last inspection", "අන්තිම පරීක්ෂාවේදී නිරෝගීයි")
+    else -> L("Not enough information yet", "තවම ඇති තරම් තොරතුරු නැහැ")
+}
+
+/** "Inspected today", "Inspected yesterday" or "Inspected 5 days ago"; empty when there was no inspection. */
+fun inspectedText(at: Long?): String {
+    if (at == null) return ""
+    val days = daysAgo(at)
+    return when {
+        days <= 0 -> L("Inspected today", "අද පරීක්ෂා කළා")
+        days == 1 -> L("Inspected yesterday", "ඊයේ පරීක්ෂා කළා")
+        else -> L("Inspected $days days ago", "දවස් ${days}කට කලින් පරීක්ෂා කළා")
+    }
+}
+
+/** The health status of one hive, worked out from what is kept on the phone (works offline). */
+fun hiveHealth(store: Store, hive: String): HiveHealth.Status =
+    HiveHealth.of(store.checks(hive), AlertItem.listFromSaved(store.savedText("alerts")), hive, uiSinhala)
+
+/** The large health card, shown at the top of the hive screen and of the newest result. */
+@Composable
+fun HealthCard(s: HiveHealth.Status, onClick: (() -> Unit)? = null) {
+    Panel(accent = healthColor(s.level), onClick = onClick) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(modifier = Modifier.size(18.dp).background(healthColor(s.level), CircleShape))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(L("Hive health", "පෙට්ටියේ සෞඛ්‍යය"), color = Muted, style = MaterialTheme.typography.bodySmall)
+                Text(healthTitle(s.level), fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
+            }
+        }
+        for (reason in s.reasons) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(modifier = Modifier.padding(top = 8.dp).size(6.dp).background(Ink, CircleShape))
+                Text(reason, color = Ink, modifier = Modifier.weight(1f))
+            }
+        }
+        val inspected = inspectedText(s.inspectedAt)
+        if (inspected.isNotEmpty()) Text(inspected, color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text(
+            when (s.level) {
+                HiveHealth.HEALTHY -> L(
+                    "Based on your own inspection. Between inspections the sound checks and the hive device keep watch.",
+                    "මේක ඔබේම පරීක්ෂාව අනුව. පරීක්ෂා අතර කාලයේදී ශබ්ද පරීක්ෂා සහ පෙට්ටියේ උපකරණය බලාගෙන ඉන්නවා."
+                )
+                HiveHealth.PROBLEM -> L(
+                    "From your answers to the five questions. The advice for each problem is on the result of that check.",
+                    "මේක ප්‍රශ්න පහට ඔබ දුන්න පිළිතුරු අනුව. හැම ප්‍රශ්නයකටම උපදෙස් ඒ පරීක්ෂාවේ ප්‍රතිඵලයේ තියෙනවා."
+                )
+                HiveHealth.LOOK -> L(
+                    "A change is a reason to inspect the hive, not proof of a problem. After you look, answer the five questions.",
+                    "වෙනසක් කියන්නේ පෙට්ටිය බලන්න හේතුවක් විතරයි, ප්‍රශ්නයක් තියෙනවා කියලා සාක්ෂියක් නෙවෙයි. බැලුවට පස්සේ ප්‍රශ්න පහට පිළිතුරු දෙන්න."
+                )
+                else -> L(
+                    "\"Healthy\" is shown only after an inspection where all five answers are good and the sound is like its own normal.",
+                    "\"නිරෝගීයි\" කියලා පෙන්නන්නේ ප්‍රශ්න පහටම හොඳ පිළිතුරු තියෙන, ශබ්දය සුපුරුදු ශබ්දය වගේ තියෙන පරීක්ෂාවකට පස්සේ විතරයි."
+                )
+            },
+            style = MaterialTheme.typography.bodySmall, color = Muted
+        )
+    }
+}
+
+/** One short health line for the list of hives on the home screen. */
+@Composable
+fun HealthLine(s: HiveHealth.Status) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(modifier = Modifier.size(10.dp).background(healthColor(s.level), CircleShape))
+        Text(
+            healthTitle(s.level) + (if (s.level == HiveHealth.PROBLEM || s.level == HiveHealth.LOOK) ": " + (s.reasons.firstOrNull() ?: "") else ""),
+            color = Ink, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall,
+            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+        )
+    }
+}

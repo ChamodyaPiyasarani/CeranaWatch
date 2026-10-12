@@ -428,7 +428,7 @@ class Agent(private val store: Store, private val cloud: Cloud) {
     private fun toolList(): JSONArray = JSONArray()
         .put(
             JSONObject().put("name", "list_hives")
-                .put("description", "Lists every hive in the app with the time and result of its latest check.")
+                .put("description", "Lists every hive in the app with the time and result of its latest check, and its health status from the app's rules (problem found, needs a look, healthy at last inspection, or not enough information yet) with the reasons.")
         )
         .put(
             JSONObject().put("name", "get_latest_check")
@@ -544,10 +544,26 @@ class Agent(private val store: Store, private val cloud: Cloud) {
             when (name) {
                 "list_hives" -> {
                     val out = JSONArray()
+                    val saved = AlertItem.listFromSaved(store.savedText("alerts"))
                     for (h in store.hives()) {
                         val all = store.checks(h)
                         val o = JSONObject().put("hive", h).put("number_of_checks", all.size)
                         if (all.isNotEmpty()) o.put("latest_check", summary(all[0]))
+                        val health = HiveHealth.of(all, saved, h, false)
+                        val reasons = JSONArray()
+                        for (x in health.reasons) reasons.put(x)
+                        o.put(
+                            "health_status", JSONObject()
+                                .put("status", HiveHealth.word(health.level))
+                                .put("reasons", reasons)
+                                .put("days_since_inspection", if (health.inspectedAt != null) daysAgo(health.inspectedAt) else JSONObject.NULL)
+                                .put(
+                                    "rule",
+                                    "From the app's rules: 'problem found' comes from the beekeeper's answers; 'needs a look' from a sound change, " +
+                                        "a very quiet check or a waiting device alert; 'healthy at last inspection' only when all five answers were good, " +
+                                        "the sound was like its own normal and no alert is waiting."
+                                )
+                        )
                         out.put(o)
                     }
                     out
@@ -572,7 +588,7 @@ class Agent(private val store: Store, private val cloud: Cloud) {
                     .put("balanced_accuracy_if_guessing", 0.33)
                     .put("meaning", "On a hive it has not heard before, the estimate is right about half the time. Treat it as an experimental estimate, not a measurement.")
                     .put("own_normal_check", "The first ${Store.BASELINE_CHECKS} good checks of a hive form its normal sound. A later check more than ${Analyzer.CHANGE_LIMIT_DB} dB away is reported as changed. " + ModelData.BASELINE_NOTE)
-                    .put("hive_device", "The optional hive device (program version 2.1) listens every few minutes. A small bee detector on the device decides for each 10-second reading if it passes as bee sound; the device says bees are present only when 3 of the last 4 readings pass, because a colony hums all the time while house and road sounds come and go. Trained on recordings from 70 hives against 57 kinds of other sounds; on apiaries and sounds it had not heard (Colab notebook Part 8, 11 Oct), with this rule about 80% of hive readings were reported as bees and about 1% of other-sound readings. With the device's own INMP441 microphone in a house it gave more false bee readings, so the beekeeper can teach it the place from the app ('No bees here' / 'Bees here'): it fits its last layer to that place; in a simulation of hard rooms this cut false bee windows from about 35% to about 2% while keeping about 82% of hive windows. Program 2.2 also has a listening range: sound quieter than the range counts as far away (not from inside the hive) and is not used; the range is set from the loudness heard while teaching, or 'hive only' (-50 dB), or 'everything'. On the house readings of 11 Oct, a range learned from 'No bees here' would have removed every false bee reading (0 of 53, against 16 of 53 without it). It has not yet been tested inside a real hive with its own microphone. Only bee-sound readings are used: the device learns the hive's normal bee-band loudness from them and raises an alert when a reading is more than ${NodeReading.Z_LIMIT} standard deviations away. It also raises a 'no bee sound' alert after several readings in a row without bees (only where it heard bees before). A DHT22 sensor measures temperature and humidity inside the hive, with a 'hot' alert at ${NodeReading.HOT_C} °C or more, two readings in a row. The device tells that something changed, not why.")
+                    .put("hive_device", "The optional hive device (program version 2.3) listens every few minutes. A small bee detector on the device decides for each 10-second reading if it passes as bee sound; the device says bees are present only when 3 of the last 4 readings pass, because a colony hums all the time while house and road sounds come and go. Trained on recordings from 70 hives against 57 kinds of other sounds; on apiaries and sounds it had not heard (Colab notebook Part 8, 11 Oct), with this rule about 80% of hive readings were reported as bees and about 1% of other-sound readings. With the device's own INMP441 microphone in a house it gave more false bee readings, so the beekeeper can teach it the place from the app ('No bees here' / 'Bees here'): it fits its last layer to that place; in a simulation of hard rooms this cut false bee windows from about 35% to about 2% while keeping about 82% of hive windows. Program 2.2 also has a listening range: sound quieter than the range counts as far away (not from inside the hive) and is not used; the range is set from the loudness heard while teaching, or 'hive only' (-50 dB), or 'everything'. On the house readings of 11 Oct, a range learned from 'No bees here' would have removed every false bee reading (0 of 53, against 16 of 53 without it). In the first field test (11 Oct 2026) it was placed at a live hive: all 58 readings passed as bee sound, and back in the house after teaching none of 13 readings did. That was one short test, so its long-term false-alert rate is not known yet. Only bee-sound readings are used: the device learns the hive's normal bee-band loudness from them and raises an alert when a reading is more than ${NodeReading.Z_LIMIT} standard deviations away. It also raises a 'no bee sound' alert after several readings in a row without bees (only where it heard bees before). A DHT22 sensor measures temperature and humidity inside the hive, with a 'hot' alert at ${NodeReading.HOT_C} °C or more, two readings in a row. The device tells that something changed, not why.")
                     .put("problems", "Neither the app nor the device detects problems such as queen loss or pests from sound. Suggestions about problems come from the beekeeper's answers to five questions.")
                     .put(
                         "on_phone_learning",

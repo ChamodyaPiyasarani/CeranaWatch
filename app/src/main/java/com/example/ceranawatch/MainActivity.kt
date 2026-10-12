@@ -471,6 +471,7 @@ fun HomeScreen(store: Store, agent: Agent, go: (Screen) -> Unit) {
                     L("Write today's summary", "අද සාරාංශය ලියන්න"),
                     "Write today's short summary for the beekeeper. First call list_hives. Then call get_alerts with only_open true, " +
                         "get_weather, and get_node_latest for each hive. If a tool says something is not set up, skip it and do not complain. " +
+                        "Use each hive's health_status from list_hives as it is; never call a hive healthy unless its status says so. " +
                         "Write at most 6 short lines: one line for each hive that needs attention (say why, from the data), one line for the " +
                         "hives that are fine, one line on new alerts, and one line on today's weather for beekeeping. Do not invent anything.",
                     daily = true, oldTitle = L("Old summary", "පරණ සාරාංශය"), auto = true
@@ -500,6 +501,7 @@ fun HomeScreen(store: Store, agent: Agent, go: (Screen) -> Unit) {
                             }
                             Chevron()
                         }
+                        HealthLine(hiveHealth(store, name))
                         if (last != null || node != null) {
                             ChipRow {
                                 if (last != null) {
@@ -603,6 +605,10 @@ fun HiveScreen(store: Store, name: String, go: (Screen) -> Unit) {
     val distances = checks.filter { it.normalDistance != null }.sortedBy { it.id }.map { it.normalDistance ?: 0.0 }
 
     Page(name, L("Hive", "මී පෙට්ටිය"), onBack = { go(Screen.Home) }, art = ART_HIVE) {
+        // the hive's health status: tapping it opens the newest inspection (or the newest check)
+        val health = hiveHealth(store, name)
+        val openId = health.inspectionId ?: checks.firstOrNull()?.id
+        HealthCard(health, onClick = if (openId != null) ({ go(Screen.ResultView(openId)) }) else null)
         BigButton(L("Check this hive now", "මේ පෙට්ටිය දැන් පරීක්ෂා කරන්න")) { go(Screen.CheckView(name)) }
         Row(
             modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),

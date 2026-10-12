@@ -342,6 +342,9 @@ private fun saveAndAnalyse(store: Store, cloud: Cloud, recorder: HiveRecorder, h
     store.saveLearnInfo(
         now,
         JSONObject().put("details", store.detailsForLearning(hive)).put("filter", filter).put("filterClips", collector.gateClips)
+            // why the other parts were thrown away (helps to find out why a check got "not enough bee sound")
+            .put("silentClips", collector.silentClips)
+            .put("ruleClips", collector.otherClips - collector.gateClips)
     )
     store.saveCheck(record)
     uploadLater(store, cloud, now)
@@ -354,7 +357,7 @@ fun uploadLater(store: Store, cloud: Cloud, id: Long) {
     Thread {
         try {
             val record = store.check(id)
-            if (record != null) cloud.uploadCheck(record, store.details(record.hive))
+            if (record != null) cloud.uploadCheck(record, store.details(record.hive), store.learnInfo(id))
         } catch (_: Exception) {
         }
     }.start()
@@ -370,7 +373,7 @@ fun deletedLater(store: Store, cloud: Cloud, hive: String, id: Long) {
         try {
             cloud.markCheckDeleted(hive, id)
             val details = store.details(hive)
-            for (r in store.checks(hive)) cloud.uploadCheck(r, details)
+            for (r in store.checks(hive)) cloud.uploadCheck(r, details, store.learnInfo(r.id))
         } catch (_: Exception) {
         }
     }.start()
@@ -395,8 +398,12 @@ fun ResultScreen(store: Store, cloud: Cloud, agent: Agent, id: Long, go: (Screen
     }
     val limit = Analyzer.CHANGE_LIMIT_DB
     val distance = oneDecimal(r.normalDistance ?: 0.0)
+    val isNewest = store.checks(r.hive).firstOrNull()?.id == id
 
     Page(r.hive, clock(r.id), onBack = { go(Screen.HiveView(r.hive)) }, art = ART_BEE) {
+        // 0. the hive's health status now (only on the newest check, so an old result never shows today's status)
+        if (isNewest) HealthCard(hiveHealth(store, r.hive))
+
         // 1. what the sound model says
         when (r.outcome) {
             Analyzer.READING -> Panel {
@@ -456,6 +463,20 @@ fun ResultScreen(store: Store, cloud: Cloud, agent: Agent, id: Long, go: (Screen
                     ),
                     color = Ink
                 )
+                // why the parts were thrown away (only for checks made with this version)
+                val why = store.learnInfo(r.id)
+                if (why != null && why.has("ruleClips")) {
+                    val silent = why.optInt("silentClips", 0)
+                    val rule = why.optInt("ruleClips", 0)
+                    val gate = why.optInt("filterClips", 0)
+                    Text(
+                        L(
+                            "Thrown away: $silent parts too quiet, $rule parts with talking or other sound (basic rule), $gate parts by the bee-sound filter.",
+                            "අයින් කළා: ගොඩක් හෙමින් තිබුණු කොටස් $silent, කතා හරි වෙනත් ශබ්ද තිබුණු කොටස් $rule (සරල පෙරහන), මී මැසි ශබ්ද පෙරහන අයින් කරපු කොටස් $gate."
+                        ),
+                        color = Ink
+                    )
+                }
                 Text(
                     L(
                         "Check that the microphone is inside the hive and the cover is closed. Move away from people and roads, stay quiet, and try again.",

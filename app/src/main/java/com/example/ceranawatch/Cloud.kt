@@ -448,7 +448,7 @@ class Cloud(private val store: Store) {
     // ---------- copies of app data ----------
 
     /** Keeps a copy of one hive check in the cloud. The sound itself is not sent. */
-    fun uploadCheck(r: CheckRecord, details: JSONObject) {
+    fun uploadCheck(r: CheckRecord, details: JSONObject, info: JSONObject? = null) {
         val o = JSONObject()
             .put("t", r.id / 1000L)
             .put("hive", r.hive)
@@ -470,6 +470,15 @@ class Cloud(private val store: Store) {
         val d = JSONObject(details.toString())
         d.remove("notes")
         o.put("details", d)
+        // why parts of the sound were thrown away (silence, the basic rule, the bee-sound filter)
+        if (info != null && info.has("filter")) {
+            val sorted = JSONObject()
+                .put("filter", info.optString("filter"))
+                .put("filterClips", info.optInt("filterClips", 0))
+            if (info.has("ruleClips")) sorted.put("ruleClips", info.optInt("ruleClips", 0))
+            if (info.has("silentClips")) sorted.put("silentClips", info.optInt("silentClips", 0))
+            o.put("thrownAway", sorted)
+        }
         send("PUT", "/checks/" + safe(r.hive) + "/" + r.id + ".json", o.toString())
     }
 
