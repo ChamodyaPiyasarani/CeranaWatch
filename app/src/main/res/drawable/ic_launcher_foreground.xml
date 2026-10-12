@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CeranaWatch icon: one honeycomb cell with sound bars inside -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- the honeycomb cell (the stroke rounds its corners) -->
+    <path
+        android:fillColor="#FFFFF8E7"
+        android:strokeColor="#FFFFF8E7"
+        android:strokeWidth="6"
+        android:strokeLineJoin="round"
+        android:pathData="M54,29L75.65,41.5L75.65,66.5L54,79L32.35,66.5L32.35,41.5Z" />
+    <!-- five sound bars -->
+    <path
+        android:strokeColor="#FF5C3A00"
+        android:strokeWidth="4.4"
+        android:strokeLineCap="round"
+        android:pathData="M40,51.2L40,56.8M47,46.2L47,61.8M54,41.2L54,66.8M61,46.2L61,61.8M68,51.2L68,56.8" />
+</vector>

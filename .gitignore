@@ -1,0 +1,21 @@
+# Android / Gradle
+*.iml
+.gradle/
+/local.properties
+local.properties
+/.idea/
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+.kotlin/
+
+# Private settings (never upload)
+/secrets.properties
+secrets.properties
+
+# Working copies and backups
+_backup_*/
+device/_*/

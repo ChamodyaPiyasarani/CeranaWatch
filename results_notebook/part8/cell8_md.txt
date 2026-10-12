@@ -1,0 +1,15 @@
+## Part 8 — the hive device's bee detector, trained with the device's own microphone (11 Oct 2026)
+
+**Why:** inside a house, with no bees, the device sometimes said "bee sound". The detector was trained on phone recordings; the device's INMP441 microphone and a house sound different.
+
+**What the device now does (program 2.1):**
+* says "bees" only when **3 of the last 4 readings** pass (a colony hums all the time; house sounds come and go);
+* can be **taught** from the app: *No bees here* / *Bees here*. It fits its last layer to the place, and sends the 50 numbers of every taught window to Firebase (`/trainfeatures`).
+
+**This part** reads those numbers and trains the whole detector again, with an honest test:
+* hive recall on apiaries the model never heard (leave one apiary out),
+* other sounds (57 kinds) it never heard,
+* the device's own newest 30% of taught windows, kept out of training.
+
+**Before you run it:** copy `device_features_v2.npz` (in `APP/results_notebook`) to Google Drive → `MyDrive/bee_data/`. Teach the device first (Live screen → *No bees here*, and at a hive *Bees here*).
+At the end it saves a new **BeeDetect.h** — put it in the `CeranaNode` folder (replace the old one) and upload to the ESP32.

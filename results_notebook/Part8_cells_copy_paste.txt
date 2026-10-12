@@ -1,0 +1,186 @@
+########## cell8_md.txt ##########
+## Part 8 — the hive device's bee detector, trained with the device's own microphone (11 Oct 2026)
+
+**Why:** inside a house, with no bees, the device sometimes said "bee sound". The detector was trained on phone recordings; the device's INMP441 microphone and a house sound different.
+
+**What the device now does (program 2.1):**
+* says "bees" only when **3 of the last 4 readings** pass (a colony hums all the time; house sounds come and go);
+* can be **taught** from the app: *No bees here* / *Bees here*. It fits its last layer to the place, and sends the 50 numbers of every taught window to Firebase (`/trainfeatures`).
+
+**This part** reads those numbers and trains the whole detector again, with an honest test:
+* hive recall on apiaries the model never heard (leave one apiary out),
+* other sounds (57 kinds) it never heard,
+* the device's own newest 30% of taught windows, kept out of training.
+
+**Before you run it:** copy `device_features_v2.npz` (in `APP/results_notebook`) to Google Drive → `MyDrive/bee_data/`. Teach the device first (Live screen → *No bees here*, and at a hive *Bees here*).
+At the end it saves a new **BeeDetect.h** — put it in the `CeranaNode` folder (replace the old one) and upload to the ESP32.
+
+########## cell8a.py ##########
+# ---------- Part 8a: load the training numbers and the device's own sounds ----------
+import os, json, time, urllib.request, numpy as np, pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.neural_network import MLPClassifier
+FIREBASE_URL = 'https://YOUR-PROJECT-default-rtdb.REGION.firebasedatabase.app'   # the same address as in the device
+HIVE_NAME = 'H01'                                                                         # the same name as in the device
+cands = [os.path.join(WORK, 'device_features_v2.npz'), '/content/drive/MyDrive/bee_data/device_features_v2.npz',
+         '/content/device_features_v2.npz', 'device_features_v2.npz']
+DEV_NPZ = next((p for p in cands if os.path.exists(p)), None)
+assert DEV_NPZ, 'Copy device_features_v2.npz (APP/results_notebook) to Google Drive: MyDrive/bee_data/ , then run this cell again.'
+D = np.load(DEV_NPZ)
+BASE = json.loads(str(D['base_model']))
+
+def fb_get(path):
+    with urllib.request.urlopen(FIREBASE_URL + path, timeout=60) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+try:
+    raw = fb_get(f'/trainfeatures/{HIVE_NAME}.json') or {}
+except Exception as e:
+    print('Could not read the device data from Firebase:', e)
+    raw = {}
+# teaching sessions: readings with the same label, less than 2 minutes apart
+DROP_SESSIONS = []        # write session numbers here to leave them out, e.g. [2, 3] if "Bees here" was pressed away from the bees
+sessions, last = [], None
+for key in sorted(raw):
+    r = raw[key]
+    t, lab = r.get('t', 0), r.get('label', '')
+    if last is None or lab != last[0] or t - last[1] > 120:
+        sessions.append({'label': lab, 'start': t, 'records': []})
+    sessions[-1]['records'].append(r); last = (lab, t)
+rows8a = []
+DF, DY, DT = [], [], []
+for i, sn in enumerate(sessions, 1):
+    probs = [p for r in sn['records'] for p in r.get('p', [])]
+    when = time.strftime('%d %b %H:%M', time.gmtime(sn['start'] + 5.5 * 3600)) if sn['start'] > 1.6e9 else '?'
+    rows8a.append({'session': i, 'label': 'bees here' if sn['label'] == 'hive' else 'no bees here', 'start (Sri Lanka time)': when,
+                   'windows': sum(len(r.get('f', [])) for r in sn['records']),
+                   'average bee chance heard': round(float(np.mean(probs)), 2) if probs else None, 'used': i not in DROP_SESSIONS})
+    if i in DROP_SESSIONS: continue
+    for r in sn['records']:
+        for f in r.get('f', []):
+            if isinstance(f, list) and len(f) == 50:
+                DF.append(f); DY.append(1 if sn['label'] == 'hive' else 0); DT.append(r.get('t', 0))
+DF, DY, DT = np.array(DF, float).reshape(-1, 50), np.array(DY, int), np.array(DT)
+if rows8a:
+    display(pd.DataFrame(rows8a).set_index('session'))
+    print('Check the table: a "bees here" session must have been done right at the bees. If not, put its number in DROP_SESSIONS and run this cell again.')
+print(f"Training numbers: {len(D['FH'])} hive windows (70 hives), {len(D['FN'])} other-sound windows, "
+      f"{len(D['FS'])} synthetic room sounds, {len(D['MX'])} hive+noise mixtures")
+print(f'From the device {HIVE_NAME}: {int((DY == 0).sum())} windows taught as "no bees here", {int((DY == 1).sum())} as "bees here"')
+if len(DY) == 0:
+    print('No device data yet: Part 8b still tests the detector, and 8c makes the same detector again. Teach the device first for a better one.')
+
+########## cell8b.py ##########
+# ---------- Part 8b: is a detector trained with the device's own sounds better? (honest test) ----------
+def mlp(X, y, seed=0):
+    sc = StandardScaler().fit(X)
+    clf = MLPClassifier(hidden_layer_sizes=(16,), alpha=1e-3, max_iter=3000, random_state=seed).fit(sc.transform(X), y)
+    return dict(mean=sc.mean_.tolist(), scale=sc.scale_.tolist(), W1=clf.coefs_[0].tolist(), b1=clf.intercepts_[0].tolist(),
+                W2=clf.coefs_[1][:, 0].tolist(), b2=float(clf.intercepts_[1][0]), bands=BASE['bands'], threshold=0.5)
+
+def hidden(m, X):
+    Z = (np.asarray(X, float) - np.array(m['mean'])) / np.array(m['scale'])
+    return np.maximum(0, Z @ np.array(m['W1']) + np.array(m['b1']))
+
+def prob(m, X):
+    return 1 / (1 + np.exp(-(hidden(m, X) @ np.array(m['W2']) + m['b2'])))
+
+def presence(p_windows):
+    """windows in time order -> share of 10-second readings (3 windows) reported as bees by the device's 3-of-4 rule"""
+    on, hist, out = False, [], []
+    for i in range(0, len(p_windows) - 2, 3):
+        hist = (hist + [np.mean(p_windows[i:i + 3]) >= 0.5])[-4:]
+        c = sum(hist)
+        if not on and c >= 3: on = True
+        elif on and c <= 1: on = False
+        out.append(on)
+    return np.mean(out) if out else np.nan
+
+FH, FN, FS, MX = D['FH'], D['FN'], D['FS'], D['MX']
+site, hive, k = D['site'], D['hive'], D['k']
+train_n = D['split'] == 'train'
+dev_test = np.zeros(len(DY), bool)                 # the newest 30% of each kind of device window are kept for testing
+for lab in (0, 1):
+    idx = np.where(DY == lab)[0]; idx = idx[np.argsort(DT[idx], kind='stable')]
+    dev_test[idx[int(len(idx) * 0.7):]] = True
+DEV_W = 5                                           # each device window counts 5 times (there are few of them)
+
+def train_set(exclude_site=None, with_device=False, device_rows=None):
+    Xp = [FH[site != exclude_site], MX[D['mix_site'] != exclude_site]]
+    Xn = [FN[train_n], FS[:len(FS) // 2]]
+    if with_device and len(DY):
+        rows = ~dev_test if device_rows is None else device_rows
+        Xp += [DF[rows & (DY == 1)]] * DEV_W
+        Xn += [DF[rows & (DY == 0)]] * DEV_W
+    Xp, Xn = np.vstack(Xp), np.vstack(Xn)
+    return np.vstack([Xp, Xn]), np.r_[np.ones(len(Xp)), np.zeros(len(Xn))]
+
+def report(name, models_by_site, m_all):
+    rates = []
+    for s, m in models_by_site.items():
+        for h in sorted(set(hive[site == s])):
+            idx = np.where(hive == h)[0]; idx = idx[np.argsort(k[idx])]
+            rates.append(presence(prob(m, FH[idx])))
+    pn = prob(m_all, FN[~train_n]); kinds = D['kind'][~train_n]
+    row = {'model': name,
+           'hive readings reported as bees (unseen apiaries)': round(float(np.nanmean(rates)), 3),
+           'other-sound readings reported as bees (57 kinds)': round(float(np.nanmean([presence(pn[kinds == kk]) for kk in sorted(set(kinds))])), 3)}
+    if len(DY):
+        pdv = prob(m_all, DF[dev_test])
+        for lab, col in [(0, 'device "no bees" windows called bees (newest 30%)'), (1, 'device "bees" windows called bees (newest 30%)')]:
+            sel = DY[dev_test] == lab
+            row[col] = round(float(np.mean(pdv[sel] >= 0.5)), 3) if sel.any() else None
+    return row
+
+t0 = time.time(); rows = []
+for name, with_dev in [('A: detector without device data', False), ("B: detector with the device's own sounds", True)]:
+    if with_dev and not len(DY): continue
+    per_site = {s: mlp(*train_set(s, with_dev)) for s in ['S01', 'S02', 'S03', 'S04']}
+    rows.append(report(name, per_site, mlp(*train_set(None, with_dev))))
+R8 = pd.DataFrame(rows).set_index('model')
+display(R8)
+print(f'({time.time() - t0:.0f} s) "hive readings": higher is better. "other sounds" and "no bees windows": lower is better.')
+
+########## cell8c.py ##########
+# ---------- Part 8c: the new detector for the device (BeeDetect.h) ----------
+use_device = len(DY) > 0
+NEW = mlp(*train_set(None, use_device, device_rows=np.ones(len(DY), bool)))
+rng = np.random.default_rng(7)
+def spread(groups, n):                              # examples spread over all hives / all sound kinds
+    keys = sorted(set(groups)); per = int(np.ceil(n / len(keys))); pick = []
+    for kk in keys:
+        idx = np.where(groups == kk)[0]; pick += list(rng.choice(idx, min(per, len(idx)), replace=False))
+    pick = np.array(pick); rng.shuffle(pick); return pick[:n]
+FO = np.vstack([FN, FS]); okind = np.r_[D['kind'], np.array(['syn_' + s for s in D['skind']])]
+store_bee = hidden(NEW, FH[spread(hive, 240)]); store_other = hidden(NEW, FO[spread(okind, 240)])   # kept on the device for teaching
+
+def num(v):
+    t = f'{v:.9g}'
+    return t if ('.' in t or 'e' in t) else t + '.0'
+def arr(name, vals, per=8):
+    vals = [float(v) for v in np.ravel(vals)]
+    return (f'static const float {name}[{len(vals)}] = {{\n' +
+            ''.join('  ' + ', '.join(num(v) + 'f' for v in vals[i:i + per]) + ',\n' for i in range(0, len(vals), per)) + '};\n')
+
+model_name = time.strftime('colab %d %b %Y') + (f' (70 hives + {len(DY)} device windows)' if use_device else ' (70 hives)')
+last = R8.iloc[-1]
+results = '// Test (Colab Part 8): ' + '; '.join(f'{c} = {v}' for c, v in last.items() if v is not None)
+header = str(D['template'])
+for key, val in {
+    '@@MODEL_NAME@@': model_name, '@@RESULTS@@': results, '@@THRESHOLD@@': '0.5',
+    '@@BAND_LO@@': ', '.join(str(b[0]) for b in NEW['bands']), '@@BAND_HI@@': ', '.join(str(b[1]) for b in NEW['bands']),
+    '@@ARRAYS@@': arr('BD_MEAN', NEW['mean']) + '\n' + arr('BD_SCALE', NEW['scale']) + '\n' + arr('BD_W1', np.ravel(NEW['W1'])) + '\n' +
+                  arr('BD_B1', NEW['b1']) + '\n' + arr('BD_W2', NEW['W2']) + 'static const float BD_B2 = ' + num(NEW['b2']) + 'f;\n\n' +
+                  '// hidden-layer values of stored examples, used when the device is taught (see fineTune)\n' +
+                  arr('BD_STORE_BEE', store_bee) + '\n' + arr('BD_STORE_OTHER', store_other)}.items():
+    header = header.replace(key, val)
+assert '@@' not in header
+out = os.path.join(WORK, 'BeeDetect.h')
+open(out, 'w').write(header)
+print(f'Saved {out} ({len(header) // 1024} KB).')
+print('Next: put it in the CeranaNode folder (replace the old BeeDetect.h), upload to the ESP32, then teach "No bees here" once more.')
+print('RESULTS ' + json.dumps({'model': model_name, **{c: v for c, v in last.items()}}))
+if IN_COLAB:
+    from google.colab import files
+    files.download(out)
+
